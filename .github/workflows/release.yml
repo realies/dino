@@ -110,8 +110,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for a in x86_64 aarch64; do
-              mv "artifacts/im.dino.Dino-$a/im.dino.Dino.flatpak" "artifacts/dino-linux-$a.flatpak"
+          # The flatpak action picks both the artifact and the file name itself,
+          # so match on the arch in the path rather than assuming either.
+          find artifacts -name '*.flatpak' -type f | while read -r f; do
+              case "$f" in
+                  *aarch64*) mv "$f" artifacts/dino-linux-aarch64.flatpak ;;
+                  *x86_64*)  mv "$f" artifacts/dino-linux-x86_64.flatpak ;;
+              esac
           done
           ( cd artifacts/dino-windows-x86_64 && zip -qr ../dino-windows-x86_64.zip . )
           printf '%s\n' \
