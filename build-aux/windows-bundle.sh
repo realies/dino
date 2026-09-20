@@ -52,8 +52,12 @@ grep -q gio-tls-backend "$OUT/lib/gio/modules/giomodule.cache" \
     || { echo "bundled GIO modules provide no TLS backend" >&2; exit 1; }
 
 # The cache records absolute build paths; rewrite it relative to bin/.
+# Keep the recorded paths relative: absolute ones would bake in the build
+# directory and break as soon as the zip is unpacked somewhere else.
 ( cd "$OUT/bin" && GDK_PIXBUF_MODULEDIR=../lib/gdk-pixbuf-2.0/2.10.0/loaders \
     gdk-pixbuf-query-loaders > ../lib/gdk-pixbuf-2.0/2.10.0/loaders.cache )
+grep -q '"svg"' "$OUT/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
+    || { echo "bundled gdk-pixbuf loaders have no svg support" >&2; exit 1; }
 
 # The check: start the packaged exe with nothing from MSYS2 on PATH. It goes
 # through Gtk.init() before handling --version, so a DLL we failed to collect
