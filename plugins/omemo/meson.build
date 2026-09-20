@@ -88,5 +88,5 @@ test_vala_args = [
     '--vapidir', meson.current_source_dir() / 'vapi',
 ]
 
-exe_omemo_test = executable('omemo-test', test_sources, c_args: c_args, vala_args: test_vala_args, dependencies: dependencies + dep_omemo_internal, build_rpath: '$ORIGIN', install: false)
+exe_omemo_test = executable('omemo-test', test_sources, c_args: c_args, vala_args: test_vala_args, dependencies: dependencies + dep_omemo_internal, build_rpath: meson.current_build_dir(), install: false)
 test('Tests for omemo', exe_omemo_test)
