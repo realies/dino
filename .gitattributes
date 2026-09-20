@@ -1,0 +1,8 @@
+# Vala verbatim strings ("""...""") keep their line breaks verbatim, so with
+# CRLF checkouts valac emits C string literals containing raw newlines and the
+# compiler rejects them. Windows git defaults to core.autocrlf=true, which is
+# enough to break the build on a fresh clone there.
+*.vala text eol=lf
+
+# Shebangs do not survive a trailing CR.
+*.sh text eol=lf
