@@ -114,8 +114,18 @@ jobs:
               mv "artifacts/im.dino.Dino-$a/im.dino.Dino.flatpak" "artifacts/dino-linux-$a.flatpak"
           done
           ( cd artifacts/dino-windows-x86_64 && zip -qr ../dino-windows-x86_64.zip . )
+          printf '%s\n' \
+            '**Linux** - `flatpak install --bundle dino-linux-<arch>.flatpak`' \
+            '' \
+            '**macOS** - unzip into `/Applications`. The bundle is ad-hoc signed rather' \
+            'than notarized, so Gatekeeper quarantines it on download. Clear that once:' \
+            '`xattr -dr com.apple.quarantine /Applications/Dino.app`' \
+            '' \
+            '**Windows** - unzip anywhere and run `bin\dino.exe`. Unsigned, so SmartScreen' \
+            'warns on first run.' \
+            > notes.md
           gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-              --title "${GITHUB_REF_NAME}" --generate-notes \
+              --title "${GITHUB_REF_NAME}" --notes-file notes.md \
               artifacts/dino-linux-x86_64.flatpak \
               artifacts/dino-linux-aarch64.flatpak \
               artifacts/dino-macos-arm64/dino-macos-arm64.zip \
