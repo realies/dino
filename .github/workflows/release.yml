@@ -1,0 +1,122 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # Same recipe as build.yml's build-flatpak job; the action uploads one
+  # artifact per arch, named im.dino.Dino-<arch>.
+  linux:
+    name: "Linux (Flatpak)"
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    strategy:
+      matrix:
+        variant:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.variant.runner }}
+    steps:
+      - name: "Checkout sources"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: "Build"
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: im.dino.Dino.json
+          bundle: im.dino.Dino.flatpak
+          arch: ${{ matrix.variant.arch }}
+
+  macos:
+    name: "macOS (app bundle)"
+    runs-on: macos-latest
+    steps:
+      - name: "Checkout sources"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: "Setup dependencies"
+        run: brew install dylibbundler gstreamer gtk4 libadwaita libgee libnice libomemo-c librsvg libsoup meson qrencode srtp vala
+      - name: "Build"
+        run: ./build-aux/macos-bundle.sh
+      - name: "Package"
+        run: ditto -c -k --keepParent Dino.app dino-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dino-macos-arm64
+          path: dino-macos-arm64.zip
+
+  windows:
+    name: "Windows (portable zip)"
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: "msys2 {0}"
+    steps:
+      - name: "Checkout sources"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: "Setup MSYS2"
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # Mirrors the dependency list of MSYS2's own mingw-w64-dino package.
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-cc
+            mingw-w64-ucrt-x86_64-glib2
+            mingw-w64-ucrt-x86_64-gnutls
+            mingw-w64-ucrt-x86_64-gpgme
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-icu
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-libgcrypt
+            mingw-w64-ucrt-x86_64-libgee
+            mingw-w64-ucrt-x86_64-libnice
+            mingw-w64-ucrt-x86_64-libomemo-c
+            mingw-w64-ucrt-x86_64-libsoup3
+            mingw-w64-ucrt-x86_64-libsrtp
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-qrencode
+            mingw-w64-ucrt-x86_64-sqlite3
+            mingw-w64-ucrt-x86_64-vala
+            mingw-w64-ucrt-x86_64-webrtc-audio-processing-1
+      - name: "Build"
+        run: ./build-aux/windows-bundle.sh build-windows dino-windows-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dino-windows-x86_64
+          path: dino-windows-x86_64
+
+  release:
+    needs: [linux, macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: "Publish"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for a in x86_64 aarch64; do
+              mv "artifacts/im.dino.Dino-$a/im.dino.Dino.flatpak" "artifacts/dino-linux-$a.flatpak"
+          done
+          ( cd artifacts/dino-windows-x86_64 && zip -qr ../dino-windows-x86_64.zip . )
+          gh release create "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" --generate-notes \
+              artifacts/dino-linux-x86_64.flatpak \
+              artifacts/dino-linux-aarch64.flatpak \
+              artifacts/dino-macos-arm64/dino-macos-arm64.zip \
+              artifacts/dino-windows-x86_64.zip
