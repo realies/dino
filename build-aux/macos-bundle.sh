@@ -84,7 +84,11 @@ if [ -n "$leaked" ]; then
     exit 1
 fi
 
-rsvg-convert -w 1024 -h 1024 main/data/icons/scalable/apps/im.dino.Dino.svg -o /tmp/dino-1024.png
+# Dino's icon fills its canvas edge to edge, which is right for a Linux icon
+# theme but oversized next to other Dock icons. Inset it ~10% so it sits on the
+# macOS grid at the same visual weight as its neighbours.
+rsvg-convert --page-width 1024 --page-height 1024 -w 840 -h 840 --top 92 --left 92 \
+    main/data/icons/scalable/apps/im.dino.Dino.svg -o /tmp/dino-1024.png
 rm -rf /tmp/dino.iconset && mkdir /tmp/dino.iconset
 for s in 16 32 64 128 256 512; do
     sips -z $s $s /tmp/dino-1024.png --out "/tmp/dino.iconset/icon_${s}x${s}.png" >/dev/null
