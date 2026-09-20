@@ -24,6 +24,10 @@ meson install -C "$BUILD" --destdir "$PWD/$OUT"
 # the module path, and SearchPathGenerator finds lib/dino/plugins the same way.
 # So the install layout already works and only the DLLs need collecting.
 # ponytail: whole GStreamer plugin dir. Subset it if download size matters.
+# glib-networking ships GLib's TLS backend as a GIO module. Miss it and
+# g_tls_backend_get_default() returns GDummyTlsBackend and no XMPP connection
+# can be established at all.
+cp -r "$P/lib/gio" "$OUT/lib/"
 cp -r "$P/lib/gdk-pixbuf-2.0" "$OUT/lib/"
 cp -r "$P/lib/gstreamer-1.0" "$OUT/lib/"
 mkdir -p "$OUT/share/glib-2.0"
@@ -40,6 +44,12 @@ ldd $(tr '\n' ' ' < /tmp/dino-modules) 2>/dev/null \
     | awk -v p="$P/" '$3 ~ "^"p {print $3}' | sort -u > /tmp/dino-dlls
 xargs -a /tmp/dino-dlls -I{} cp {} "$OUT/bin/"
 rm -f /tmp/dino-modules /tmp/dino-dlls
+
+gio-querymodules "$OUT/lib/gio/modules"
+# A bundle that starts fine but has no TLS backend cannot connect to
+# anything, and --version will not notice. Assert the module registered.
+grep -q gio-tls-backend "$OUT/lib/gio/modules/giomodule.cache" \
+    || { echo "bundled GIO modules provide no TLS backend" >&2; exit 1; }
 
 # The cache records absolute build paths; rewrite it relative to bin/.
 ( cd "$OUT/bin" && GDK_PIXBUF_MODULEDIR=../lib/gdk-pixbuf-2.0/2.10.0/loaders \

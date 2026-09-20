@@ -51,8 +51,32 @@ for e in $GST_ELEMENTS; do
     cp -f "$f" "$RES/lib/gstreamer-1.0/"
 done
 
+# glib-networking ships GLib's TLS backend as a GIO module. Miss it and
+# g_tls_backend_get_default() returns GDummyTlsBackend, so every XMPP
+# connection fails before a socket is even opened.
+mkdir -p "$RES/lib/gio/modules"
+cp -f "$BREW"/lib/gio/modules/*.so "$RES/lib/gio/modules/"
+# Must run before dylibbundler: gio-querymodules dlopens each module, which
+# stops working once their deps point at @executable_path.
+gio-querymodules "$RES/lib/gio/modules"
+# A bundle that starts but has no TLS backend cannot reach any server, and
+# --version will not notice. Assert the module actually registered.
+grep -q gio-tls-backend "$RES/lib/gio/modules/giomodule.cache" \
+    || { echo "bundled GIO modules provide no TLS backend" >&2; exit 1; }
+
 # Runtime data GLib/GTK look up by path, not relative to the binary.
 cp -RL "$BREW/lib/gdk-pixbuf-2.0" "$RES/lib/"
+# Its cache holds absolute Homebrew paths, so regenerate it. Query the
+# Homebrew copies rather than ours and rewrite the paths afterwards: the svg
+# loader reaches librsvg through @rpath, which only resolves where Homebrew
+# installed it, so querying our copies silently drops svg support.
+gdk-pixbuf-query-loaders \
+    | sed "s|$BREW/lib/gdk-pixbuf-2.0/2.10.0/loaders|$PWD/$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders|g" \
+    > "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+# Any line starting with a quote means a loader registered. png and jpeg are
+# built into gdk-pixbuf; svg and the rest are the ones that come from modules.
+grep -q '"svg"' "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
+    || { echo "bundled gdk-pixbuf loaders have no svg support" >&2; exit 1; }
 mkdir -p "$RES/share/glib-2.0"
 cp -RL "$BREW/share/glib-2.0/schemas" "$RES/share/glib-2.0/"
 cp -RL "$BREW/share/icons" "$RES/share/"
@@ -61,7 +85,7 @@ glib-compile-schemas "$RES/share/glib-2.0/schemas"
 # Rewrite every Mach-O's dependencies to @executable_path/../Frameworks.
 # The -s paths resolve @rpath references; miss one and dylibbundler prompts for
 # it on stdin and spins forever, so keep them complete rather than adding a timeout.
-find "$RES/lib" -name '*.dylib' -exec printf -- '-x\n%s\n' {} + > /tmp/dino-bundle-args
+find "$RES/lib" \( -name '*.dylib' -o -name '*.so' \) -exec printf -- '-x\n%s\n' {} + > /tmp/dino-bundle-args
 # shellcheck disable=SC2046
 dylibbundler -of -b -cd -d "$FW" -p '@executable_path/../Frameworks' \
     -s "$RES/lib" -s "$BREW/lib" \
@@ -73,7 +97,7 @@ rm -f "$RES"/lib/*.dylib  # originals; dylibbundler copied them into Frameworks
 # host. A CI runner has Homebrew installed, so launching proves nothing here --
 # only the link table does. Skip each file's own install id (otool prints it
 # first, and a copied plugin keeps the id it had in the Cellar).
-leaked=$(find "$APP" -type f \( -name '*.dylib' -o -name 'dino-bin' \) -print0 \
+leaked=$(find "$APP" -type f \( -name '*.dylib' -o -name '*.so' -o -name 'dino-bin' \) -print0 \
     | xargs -0 -n1 otool -L \
     | awk -v brew="$BREW/" '/:$/ {n = 0; next} {n++}
                             n > 1 && index($1, brew) == 1 {print $1}' \
@@ -127,6 +151,7 @@ cat > "$APP/Contents/MacOS/Dino" <<'LAUNCHER'
 res="$(cd "$(dirname "$0")/../Resources" && pwd)"
 export DINO_PLUGIN_DIR="$res/lib/dino/plugins"
 export DINO_LOCALE_DIR="$res/share/locale"
+export GIO_MODULE_DIR="$res/lib/gio/modules"
 export XDG_DATA_DIRS="$res/share"
 export GSETTINGS_SCHEMA_DIR="$res/share/glib-2.0/schemas"
 export GDK_PIXBUF_MODULE_FILE="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
@@ -136,11 +161,6 @@ mkdir -p "$(dirname "$GST_REGISTRY")"
 exec "$(dirname "$0")/dino-bin" "$@"
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/Dino"
-
-# gdk-pixbuf's loader cache holds absolute Homebrew paths; regenerate against ours.
-GDK_PIXBUF_MODULEDIR="$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders" \
-    gdk-pixbuf-query-loaders \
-    > "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 
 codesign --force --deep --sign - "$APP"
 
