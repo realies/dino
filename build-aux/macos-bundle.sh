@@ -122,6 +122,7 @@ cat > "$APP/Contents/MacOS/Dino" <<'LAUNCHER'
 # resolves to this bundle, which is what enables Cocoa notifications.
 res="$(cd "$(dirname "$0")/../Resources" && pwd)"
 export DINO_PLUGIN_DIR="$res/lib/dino/plugins"
+export DINO_LOCALE_DIR="$res/share/locale"
 export XDG_DATA_DIRS="$res/share"
 export GSETTINGS_SCHEMA_DIR="$res/share/glib-2.0/schemas"
 export GDK_PIXBUF_MODULE_FILE="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"

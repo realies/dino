@@ -15,6 +15,12 @@ public class SearchPathGenerator {
     }
 
     public string get_locale_path(string gettext_package, string locale_install_dir) {
+        // locale_install_dir is baked in at build time, so it is wrong for any
+        // tree that gets relocated after install -- an .app bundle dragged to
+        // /Applications, say. Same escape hatch as DINO_PLUGIN_DIR.
+        string? env_locale_dir = Environment.get_variable("DINO_LOCALE_DIR");
+        if (env_locale_dir != null) return env_locale_dir;
+
         string? locale_dir = null;
         string dirname = Path.get_dirname(exec_path);
         // Does our environment look like a CMake build dir?
