@@ -6,3 +6,5 @@ Makefile
 .idea
 .sqlite3
 gschemas.compiled
+/Dino.app/
+build-*/

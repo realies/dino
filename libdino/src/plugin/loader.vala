@@ -38,7 +38,8 @@ public class Loader : Object {
                 Dir dir = Dir.open(path, 0);
                 string? file = null;
                 while ((file = dir.read_name()) != null) {
-                    if (file.has_suffix(Module.SUFFIX)) plugin_names.add(file);
+                    // G_MODULE_SUFFIX is "so" on macOS, but shared libraries are built as .dylib there
+                    if (file.has_suffix(Module.SUFFIX) || file.has_suffix(".dylib")) plugin_names.add(file);
                 }
             } catch (Error e) {
                 // Ignore this folder
