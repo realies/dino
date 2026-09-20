@@ -45,6 +45,13 @@ public class SearchPathGenerator {
                 }
             }
         }
+        // Installed next to a bin/ directory, the same shape get_plugin_paths
+        // recognises. Resolving it from exec_path survives relocation, which
+        // the baked-in locale_install_dir does not.
+        if (locale_dir == null && Path.get_basename(dirname) == "bin") {
+            string sibling = Path.build_filename(Path.get_dirname(dirname), "share", "locale");
+            if (FileUtils.test(sibling, FileTest.IS_DIR)) locale_dir = sibling;
+        }
         return locale_dir ?? locale_install_dir;
     }
 
