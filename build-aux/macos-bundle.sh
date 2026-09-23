@@ -29,7 +29,8 @@ meson install -C "$BUILD" >/dev/null
 mkdir -p "$APP/Contents/MacOS" "$FW"
 mv "$RES/bin/dino" "$APP/Contents/MacOS/dino-bin"
 rmdir "$RES/bin"
-rm -rf "$RES/share/applications" "$RES/share/dbus-1" "$RES/share/metainfo"
+rm -rf "$RES/share/applications" "$RES/share/dbus-1" "$RES/share/metainfo" \
+    "$RES/include" "$RES/share/vala"
 
 # GStreamer ships 277 plugins (~165M) but Dino only ever asks for these elements
 # -- plugins/rtp/src/codec_util.vala plus the ElementFactory.make() calls around
@@ -66,17 +67,19 @@ grep -q gio-tls-backend "$RES/lib/gio/modules/giomodule.cache" \
 
 # Runtime data GLib/GTK look up by path, not relative to the binary.
 cp -RL "$BREW/lib/gdk-pixbuf-2.0" "$RES/lib/"
-# Its cache holds absolute Homebrew paths, so regenerate it. Query the
-# Homebrew copies rather than ours and rewrite the paths afterwards: the svg
-# loader reaches librsvg through @rpath, which only resolves where Homebrew
-# installed it, so querying our copies silently drops svg support.
+# Its cache must name every loader by absolute path, which only holds on the
+# machine that wrote it, so ship a template and let the launcher fill in where
+# the bundle actually lives. Query the Homebrew copies: the svg loader reaches
+# librsvg through @rpath, which only resolves where Homebrew installed it.
+cache="$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 gdk-pixbuf-query-loaders \
-    | sed "s|$BREW/lib/gdk-pixbuf-2.0/2.10.0/loaders|$PWD/$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders|g" \
-    > "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
-# Any line starting with a quote means a loader registered. png and jpeg are
-# built into gdk-pixbuf; svg and the rest are the ones that come from modules.
-grep -q '"svg"' "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
-    || { echo "bundled gdk-pixbuf loaders have no svg support" >&2; exit 1; }
+    | sed "s|$BREW/lib/gdk-pixbuf-2.0|@RES@/lib/gdk-pixbuf-2.0|g" > "$cache"
+# png and jpeg are built into gdk-pixbuf; svg is the module format that matters.
+# Module lines are the ones naming a .so; the XPM loader's "/* XPM */" magic
+# pattern also starts with a slash but is not a path.
+if ! grep -q '"svg"' "$cache" || grep -q '^"/.*\.so"$' "$cache"; then
+    echo "$cache lacks svg support or still holds absolute paths" >&2; exit 1
+fi
 mkdir -p "$RES/share/glib-2.0"
 cp -RL "$BREW/share/glib-2.0/schemas" "$RES/share/glib-2.0/"
 cp -RL "$BREW/share/icons" "$RES/share/"
@@ -93,6 +96,17 @@ dylibbundler -of -b -cd -d "$FW" -p '@executable_path/../Frameworks' \
 rm -f /tmp/dino-bundle-args
 rm -f "$RES"/lib/*.dylib  # originals; dylibbundler copied them into Frameworks
 
+# dylibbundler adds its rpath even to a file that already carries it, and dyld
+# on macOS 26 refuses to load any Mach-O with a duplicate LC_RPATH -- which
+# silently broke the svg loader. Drop the extra copies and re-sign.
+find "$APP" -type f \( -name '*.dylib' -o -name '*.so' -o -name dino-bin \) | while read -r f; do
+    otool -l "$f" | awk '/cmd LC_RPATH/{getline; getline; print $2}' | sort | uniq -c \
+        | awk '$1 > 1 {for (i = 1; i < $1; i++) print $2}' | while read -r r; do
+        install_name_tool -delete_rpath "$r" "$f"
+        codesign --force --sign - "$f"
+    done
+done
+
 # The check: nothing inside the bundle may still need a library from the build
 # host. A CI runner has Homebrew installed, so launching proves nothing here --
 # only the link table does. Skip each file's own install id (otool prints it
@@ -108,19 +122,40 @@ if [ -n "$leaked" ]; then
     exit 1
 fi
 
+# Homebrew builds GnuTLS with $BREW/etc/gnutls/cert.pem as its one and only
+# trust source, so on a Mac without Homebrew it trusts nothing and every TLS
+# handshake fails. Repoint it at the CA bundle macOS itself ships. The new path
+# is NUL-padded to the old length so the C string stays intact. Re-sign at once:
+# macOS kills any process that loads a library with a broken signature.
+python3 - "$FW"/libgnutls.*.dylib "$BREW/etc/gnutls/cert.pem" /etc/ssl/cert.pem <<'PY'
+import sys
+lib, old, new = sys.argv[1], sys.argv[2].encode() + b"\0", sys.argv[3].encode()
+data = open(lib, "rb").read()
+assert data.count(old) == 1, f"expected {old!r} exactly once in {lib}"
+open(lib, "wb").write(data.replace(old, new.ljust(len(old), b"\0")))
+PY
+codesign --force --sign - "$FW"/libgnutls.*.dylib
+
 # Dino's icon fills its canvas edge to edge, which is right for a Linux icon
 # theme but oversized next to other Dock icons. Inset it ~10% so it sits on the
 # macOS grid at the same visual weight as its neighbours.
 rsvg-convert --page-width 1024 --page-height 1024 -w 840 -h 840 --top 92 --left 92 \
     main/data/icons/scalable/apps/im.dino.Dino.svg -o /tmp/dino-1024.png
 rm -rf /tmp/dino.iconset && mkdir /tmp/dino.iconset
-for s in 16 32 64 128 256 512; do
+for s in 16 32 128 256 512; do
     sips -z $s $s /tmp/dino-1024.png --out "/tmp/dino.iconset/icon_${s}x${s}.png" >/dev/null
     sips -z $((s*2)) $((s*2)) /tmp/dino-1024.png --out "/tmp/dino.iconset/icon_${s}x${s}@2x.png" >/dev/null
 done
 iconutil -c icns /tmp/dino.iconset -o "$RES/dino.icns"
 
+# Bundle versions must be plain dotted numbers, so drop any ~git suffix.
 VERSION=$("$APP/Contents/MacOS/dino-bin" --version 2>/dev/null | sed 's/^Dino //')
+VERSION=${VERSION%%[!0-9.]*}
+[ -n "$VERSION" ] || { echo "could not read a version from dino-bin" >&2; exit 1; }
+# The real floor is whatever the newest bundled binary was built for, which is
+# the macOS version Homebrew's bottles target on the build host.
+MINOS=$(find "$APP" -type f \( -name '*.dylib' -o -name '*.so' -o -name dino-bin \) \
+    -exec otool -l {} + | awk '/minos/{print $2}' | sort -V | tail -1)
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -135,7 +170,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
-    <key>LSMinimumSystemVersion</key><string>12.0</string>
+    <key>LSMinimumSystemVersion</key><string>${MINOS}</string>
     <key>NSCameraUsageDescription</key><string>Dino needs the camera for video calls.</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Dino needs the microphone for calls.</string>
@@ -154,19 +189,39 @@ export DINO_LOCALE_DIR="$res/share/locale"
 export GIO_MODULE_DIR="$res/lib/gio/modules"
 export XDG_DATA_DIRS="$res/share"
 export GSETTINGS_SCHEMA_DIR="$res/share/glib-2.0/schemas"
-export GDK_PIXBUF_MODULE_FILE="$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export GST_PLUGIN_SYSTEM_PATH="$res/lib/gstreamer-1.0"
-export GST_REGISTRY="${HOME}/Library/Caches/im.dino.Dino/gst-registry.bin"
-mkdir -p "$(dirname "$GST_REGISTRY")"
+cache="${HOME}/Library/Caches/im.dino.Dino"
+mkdir -p "$cache"
+export GST_REGISTRY="$cache/gst-registry.bin"
+# gdk-pixbuf wants absolute loader paths, so fill in wherever the bundle lives
+# right now. The inner sed escapes what is special in a sed replacement.
+sed "s|@RES@|$(printf '%s' "$res" | sed 's/[&|\\]/\\&/g')|g" \
+    "$res/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" > "$cache/loaders.cache"
+export GDK_PIXBUF_MODULE_FILE="$cache/loaders.cache"
 exec "$(dirname "$0")/dino-bin" "$@"
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/Dino"
 
 codesign --force --deep --sign - "$APP"
 
-# The check: launch through the launcher, which is the path a user takes. Dino
-# runs Gtk.init() before handling --version, so a missing runtime piece surfaces
-# here rather than on someone else's Mac.
-"$APP/Contents/MacOS/Dino" --version
+# The check: run a relocated copy the way it will run on someone else's Mac,
+# with Homebrew and this build tree unreadable. Dino must start with every
+# plugin loaded (it exits 0 even when one fails, so match the version line).
+# bundle-check then covers what --version never loads, an svg and a verified
+# TLS handshake, using the loader cache the launcher just wrote for this copy.
+QA=$(mktemp -d)
+ditto "$APP" "$QA/Dino.app"
+Q="$QA/Dino.app/Contents/Resources"
+cc build-aux/bundle-check.c -o "$QA/Dino.app/Contents/MacOS/bundle-check" \
+    $(pkg-config --cflags gio-2.0 gdk-pixbuf-2.0) -L"$QA/Dino.app/Contents/Frameworks" \
+    -lgdk_pixbuf-2.0.0 -lgio-2.0.0 -lgobject-2.0.0 -lglib-2.0.0
+NOREAD="(version 1)(allow default)(deny file-read* (subpath \"$BREW\") (subpath \"$PWD\"))"
+( cd "$QA" && HOME="$QA" sandbox-exec -p "$NOREAD" "$QA/Dino.app/Contents/MacOS/Dino" --version ) \
+    | grep '^Dino '
+( cd "$QA" && GIO_MODULE_DIR="$Q/lib/gio/modules" \
+    GDK_PIXBUF_MODULE_FILE="$QA/Library/Caches/im.dino.Dino/loaders.cache" \
+    sandbox-exec -p "$NOREAD" "$QA/Dino.app/Contents/MacOS/bundle-check" \
+    "$Q/share/icons/hicolor/scalable/apps/im.dino.Dino.svg" )
+rm -rf "$QA"
 
 echo "$APP  $(du -sh "$APP" | cut -f1)"
