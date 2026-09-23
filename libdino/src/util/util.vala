@@ -50,7 +50,9 @@ public class SearchPathGenerator {
         // the baked-in locale_install_dir does not.
         if (locale_dir == null && Path.get_basename(dirname) == "bin") {
             string sibling = Path.build_filename(Path.get_dirname(dirname), "share", "locale");
-            if (FileUtils.test(sibling, FileTest.IS_DIR)) locale_dir = sibling;
+            if (FileUtils.test(Path.build_filename(sibling, "en", "LC_MESSAGES", gettext_package + ".mo"), FileTest.IS_REGULAR)) {
+                locale_dir = sibling;
+            }
         }
         return locale_dir ?? locale_install_dir;
     }
