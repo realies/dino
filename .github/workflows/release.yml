@@ -34,7 +34,9 @@ jobs:
 
   macos:
     name: "macOS (app bundle)"
-    runs-on: macos-latest
+    # Pinned: Homebrew's bottles are built for the runner's macOS, so this sets
+    # the oldest macOS the app runs on. The release notes below say so.
+    runs-on: macos-26
     steps:
       - name: "Checkout sources"
         uses: actions/checkout@v4
@@ -122,8 +124,9 @@ jobs:
           printf '%s\n' \
             '**Linux** - `flatpak install --bundle dino-linux-<arch>.flatpak`' \
             '' \
-            '**macOS** - unzip into `/Applications`. The bundle is ad-hoc signed rather' \
-            'than notarized, so Gatekeeper quarantines it on download. Clear that once:' \
+            '**macOS** - Apple silicon, macOS 26 or later. Unzip into `/Applications`. The' \
+            'bundle is ad-hoc signed rather than notarized, so Gatekeeper quarantines it on' \
+            'download. Clear that once:' \
             '`xattr -dr com.apple.quarantine /Applications/Dino.app`' \
             '' \
             '**Windows** - unzip anywhere and run `bin\dino.exe`. Unsigned, so SmartScreen' \
