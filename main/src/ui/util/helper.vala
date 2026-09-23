@@ -106,14 +106,17 @@ public static bool is_dark_theme(Gtk.Widget widget) {
 private static int8 is24h = 0;
 public static bool is_24h_format() {
     if (is24h == 0) {
-        // Render a known afternoon time in the locale's preferred format. 24h
-        // locales print "13", 12h ones print "01" plus an AM/PM marker.
+        // A 12h locale renders an afternoon time with its PM marker. Matching
+        // the marker rather than the digits "13" keeps locales like fa_IR,
+        // whose %X uses native digits, reading as 24h.
         // ponytail: replaces Posix.nl_langinfo(), which does not exist on
         // Windows. GLib falls back to a hardcoded "%H:%M:%S" wherever
         // nl_langinfo() is missing, and BSD libc reports it for every locale,
         // so macOS and Windows always read as 24h. Upgrade path is the platform
         // locale API (NSDateFormatter / GetLocaleInfoEx) behind an #if.
-        is24h = new DateTime.utc(2000, 1, 1, 13, 0, 0).format("%X").contains("13") ? 1 : -1;
+        var afternoon = new DateTime.utc(2000, 1, 1, 13, 0, 0);
+        string pm = afternoon.format("%p").strip();
+        is24h = (pm != "" && afternoon.format("%X").contains(pm)) ? -1 : 1;
     }
     return is24h == 1;
 }
