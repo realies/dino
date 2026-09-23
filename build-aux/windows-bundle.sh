@@ -34,13 +34,18 @@ mkdir -p "$OUT/share/glib-2.0"
 cp -r "$P/share/glib-2.0/schemas" "$OUT/share/glib-2.0/"
 cp -r "$P/share/icons" "$OUT/share/"
 glib-compile-schemas "$OUT/share/glib-2.0/schemas"
-rm -rf "$OUT/share/applications" "$OUT/share/dbus-1" "$OUT/share/metainfo"
+rm -rf "$OUT/share/applications" "$OUT/share/dbus-1" "$OUT/share/metainfo" \
+    "$OUT/include" "$OUT/share/vala"
+find "$OUT/lib" -name '*.dll.a' -delete
 
-# ldd resolves the whole graph, so one pass over every module we ship is enough.
+# ldd resolves the whole graph, so one pass over every module we ship is enough
+# -- as long as each module can actually load. ldd quietly stops listing at the
+# first DLL it cannot find, and the plugins link our own DLLs in bin/, so put
+# bin/ on PATH. Without it libprotobuf-c and libassuan never got collected.
 find "$OUT" -name '*.dll' > /tmp/dino-modules
 echo "$OUT/bin/dino.exe" >> /tmp/dino-modules
 # shellcheck disable=SC2046
-ldd $(tr '\n' ' ' < /tmp/dino-modules) 2>/dev/null \
+PATH="$PWD/$OUT/bin:$PATH" ldd $(tr '\n' ' ' < /tmp/dino-modules) 2>/dev/null \
     | awk -v p="$P/" '$3 ~ "^"p {print $3}' | sort -u > /tmp/dino-dlls
 xargs -a /tmp/dino-dlls -I{} cp {} "$OUT/bin/"
 rm -f /tmp/dino-modules /tmp/dino-dlls
@@ -51,17 +56,23 @@ gio-querymodules "$OUT/lib/gio/modules"
 grep -q gio-tls-backend "$OUT/lib/gio/modules/giomodule.cache" \
     || { echo "bundled GIO modules provide no TLS backend" >&2; exit 1; }
 
-# The cache records absolute build paths; rewrite it relative to bin/.
-# Keep the recorded paths relative: absolute ones would bake in the build
-# directory and break as soon as the zip is unpacked somewhere else.
-( cd "$OUT/bin" && GDK_PIXBUF_MODULEDIR=../lib/gdk-pixbuf-2.0/2.10.0/loaders \
-    gdk-pixbuf-query-loaders > ../lib/gdk-pixbuf-2.0/2.10.0/loaders.cache )
+# Record loader paths relative to the install root, the directory above bin/:
+# that is what gdk-pixbuf resolves relative paths against on Windows. Absolute
+# ones would bake in the build directory.
+( cd "$OUT" && GDK_PIXBUF_MODULEDIR=lib/gdk-pixbuf-2.0/2.10.0/loaders \
+    gdk-pixbuf-query-loaders > lib/gdk-pixbuf-2.0/2.10.0/loaders.cache )
 grep -q '"svg"' "$OUT/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" \
     || { echo "bundled gdk-pixbuf loaders have no svg support" >&2; exit 1; }
 
-# The check: start the packaged exe with nothing from MSYS2 on PATH. It goes
-# through Gtk.init() before handling --version, so a DLL we failed to collect
-# shows up here rather than on a user's machine.
-( cd "$OUT/bin" && PATH="$PWD" ./dino.exe --version )
+# The checks: run what we ship with nothing but bin/ on PATH. Dino must start
+# with every plugin loaded -- it exits 0 even when one fails, so match the
+# version line.
+( cd "$OUT/bin" && PATH="$PWD" ./dino.exe --version ) | grep '^Dino '
+# bundle-check covers what --version never loads: an svg and a verified TLS
+# handshake. Run it from / so a path that only resolves from bin/ still fails.
+cc build-aux/bundle-check.c -o "$OUT/bin/bundle-check.exe" $(pkg-config --cflags --libs gio-2.0 gdk-pixbuf-2.0)
+B="$PWD/$OUT/bin"
+( cd / && PATH="$B" "$B/bundle-check.exe" "$B/../share/icons/hicolor/scalable/apps/im.dino.Dino.svg" )
+rm "$OUT/bin/bundle-check.exe"
 
 du -sh "$OUT"
